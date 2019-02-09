@@ -1,0 +1,64 @@
+#!/bin/bash
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+BASE=$(cd `dirname $0`; pwd)
+
+pushd ${BASE} >/dev/null
+
+OPTS=$(getopt -o "hcv:" -l "help,clean,version" -n `basename $0` -- "$@")
+eval set -- "${OPTS}"
+
+# defaults
+CLEAN=0
+VERSION=$(git describe --tags)
+VERSION=${VERSION##*/}
+VERSION=${VERSION#v}
+
+while true; do
+  case "$1" in
+    '-h'|'--help')
+      echo "usage:"
+      echo "  $0 -h|--help"
+      echo "  $0 [-c|--clean] [-v|--version <VERSION>]"
+      exit 0
+      ;;
+    '-c'|'--clean')
+      CLEAN=1
+      ;;
+    '-v'|'--version')
+      VERSION="$2"
+      shift
+      ;;
+    '--')
+      shift
+      break
+      ;;
+  esac
+  shift
+done
+
+if [[ ${CLEAN} -eq 1 ]] ; then
+  ant clean
+fi
+
+echo "building solr (version=${VERSION})"
+
+ant jar -Dversion=${VERSION}
+
+pushd solr >/dev/null
+ant create-package -Dversion=${VERSION}
+popd >/dev/null # lucene-solr/solr
+
+DIST="${BASE}/solr/package/solr-${VERSION}.tgz"
+
+[[ -f ${DIST} ]] && RES=ok
+echo "dist: $DIST: [${RES:-fail}]"
+
+[[ -f ${DIST} ]] && mv ${DIST} ./
+
+popd >/dev/null # lucene-solr
+
+# vim: sw=2:sts=2:et:ai:
