@@ -832,7 +832,7 @@ public final class SegmentInfos implements Cloneable, Iterable<SegmentCommitInfo
         buffer.append(' ');
       }
       final SegmentCommitInfo info = info(i);
-      buffer.append(info.toString(0));
+      buffer.append(info.toString(0, false, false));
     }
     return buffer.toString();
   }

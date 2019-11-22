@@ -341,8 +341,8 @@ public class SegmentCommitInfo {
   }
 
   /** Returns a description of this segment. */
-  public String toString(int pendingDelCount) {
-    String s = info.toString(delCount + pendingDelCount);
+  public String toString(int pendingDelCount, boolean withAttributes, boolean withDiagnostics) {
+    String s = info.toString(delCount + pendingDelCount, withAttributes, withDiagnostics);
     if (delGen != -1) {
       s += ":delGen=" + delGen;
     }
@@ -361,7 +361,7 @@ public class SegmentCommitInfo {
 
   @Override
   public String toString() {
-    return toString(0);
+    return toString(0, false, false);
   }
 
   @Override

@@ -4675,7 +4675,7 @@ public class IndexWriter implements Closeable, TwoPhaseCommit, Accountable,
    *
    * @lucene.internal */
   private synchronized String segString(SegmentCommitInfo info) {
-    return info.toString(numDeletedDocs(info) - info.getDelCount(softDeletesEnabled));
+    return info.toString(numDeletedDocs(info) - info.getDelCount(softDeletesEnabled), true, true);
   }
 
   private synchronized void doWait() {
