@@ -180,7 +180,7 @@ public final class SegmentInfo {
 
   @Override
   public String toString() {
-    return toString(0);
+    return toString(0, false, false);
   }
 
   /** Used for debugging.  Format may suddenly change.
@@ -194,7 +194,7 @@ public final class SegmentInfo {
    *  left off when there are no deletions); it is sorted by the timestamp field
    *  in descending order (this part is omitted for unsorted segments).</p>
    */
-  public String toString(int delCount) {
+  public String toString(int delCount, boolean withAttributes, boolean withDiagnostics) {
     StringBuilder s = new StringBuilder();
     s.append(name).append('(').append(version == null ? "?" : version).append(')').append(':');
     char cfs = getUseCompoundFile() ? 'c' : 'C';
@@ -212,13 +212,13 @@ public final class SegmentInfo {
       s.append(']');
     }
 
-    if (!diagnostics.isEmpty()) {
+    if (withDiagnostics && !diagnostics.isEmpty()) {
       s.append(":[diagnostics=");
       s.append(diagnostics.toString());
       s.append(']');
     }
 
-    if (!attributes.isEmpty()) {
+    if (withAttributes && !attributes.isEmpty()) {
       s.append(":[attributes=");
       s.append(attributes.toString());
       s.append(']');

@@ -134,21 +134,21 @@ public class TestSegmentInfos extends LuceneTestCase {
     si = new SegmentInfo(dir, Version.LATEST, Version.LATEST, "TEST", 10000, false, codec, Collections.emptyMap(), StringHelper.randomId(), new HashMap<>(), Sort.INDEXORDER);
     assertEquals("TEST(" + Version.LATEST.toString() + ")" +
         ":C10000" +
-        ":[indexSort=<doc>]", si.toString());
+        ":[indexSort=<doc>]", si.toString(0, true, true));
 
     // diagnostics O, attributes X
     si = new SegmentInfo(dir, Version.LATEST, Version.LATEST, "TEST", 10000, false, codec, diagnostics, StringHelper.randomId(), new HashMap<>(), Sort.INDEXORDER);
     assertEquals("TEST(" + Version.LATEST.toString() + ")" +
         ":C10000" +
         ":[indexSort=<doc>]" +
-        ":[diagnostics={key1=value1, key2=value2}]", si.toString());
+        ":[diagnostics={key1=value1, key2=value2}]", si.toString(0, true, true));
 
     // diagnostics X, attributes O
     si = new SegmentInfo(dir, Version.LATEST, Version.LATEST, "TEST", 10000, false, codec, Collections.emptyMap(), StringHelper.randomId(), attributes, Sort.INDEXORDER);
     assertEquals("TEST(" + Version.LATEST.toString() + ")" +
         ":C10000" +
         ":[indexSort=<doc>]" +
-        ":[attributes={key1=value1, key2=value2}]", si.toString());
+        ":[attributes={key1=value1, key2=value2}]", si.toString(0, true, true));
 
     // diagnostics O, attributes O
     si = new SegmentInfo(dir, Version.LATEST, Version.LATEST, "TEST", 10000, false, codec, diagnostics, StringHelper.randomId(), attributes, Sort.INDEXORDER);
@@ -157,7 +157,7 @@ public class TestSegmentInfos extends LuceneTestCase {
         ":C10000" +
         ":[indexSort=<doc>]" +
         ":[diagnostics={key1=value1, key2=value2}]" +
-        ":[attributes={key1=value1, key2=value2}]", si.toString());
+        ":[attributes={key1=value1, key2=value2}]", si.toString(0, true, true));
 
     dir.close();
   }

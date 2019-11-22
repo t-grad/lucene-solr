@@ -771,7 +771,7 @@ public abstract class MergePolicy {
    */
   protected final String segString(MergeContext mergeContext, Iterable<SegmentCommitInfo> infos) {
     return StreamSupport.stream(infos.spliterator(), false)
-        .map(info -> info.toString(mergeContext.numDeletedDocs(info) - info.getDelCount()))
+        .map(info -> info.toString(mergeContext.numDeletedDocs(info) - info.getDelCount(), true, true))
         .collect(Collectors.joining(" "));
   }
 
