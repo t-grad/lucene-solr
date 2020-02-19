@@ -167,7 +167,7 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
         UninvertingReader.wrap(reader, core.getLatestSchema().getUninversionMapper()),
         SolrQueryTimeoutImpl.getInstance());
   }
-  
+
   /**
    * Builds the necessary collector chain (via delegate wrapping) and executes the query against it. This method takes
    * into consideration both the explicitly provided collector and postFilter as well as any needed collector wrappers
@@ -437,6 +437,9 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
     infoRegistry.put(STATISTICS_KEY, this);
     infoRegistry.put(name, this);
     for (@SuppressWarnings({"rawtypes"})SolrCache cache : cacheList) {
+      if (cache instanceof SolrIndexSearcherAware) {
+        ((SolrIndexSearcherAware) cache).inform(this);
+      }
       cache.setState(SolrCache.State.LIVE);
       infoRegistry.put(cache.name(), cache);
     }
@@ -2304,9 +2307,9 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
         }), true, "statsCache", Category.CACHE.toString(), scope);
   }
 
-  /** 
-   * wraps a gauge (related to an IndexReader) and swallows any {@link AlreadyClosedException} that 
-   * might be thrown, returning the specified default in it's place. 
+  /**
+   * wraps a gauge (related to an IndexReader) and swallows any {@link AlreadyClosedException} that
+   * might be thrown, returning the specified default in it's place.
    */
   private <T> Gauge<T> rgauge(T closedDefault, Gauge<T> g) {
     return () -> {
@@ -2317,7 +2320,7 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
       }
     };
   }
-  
+
   private static class FilterImpl extends Filter {
     private final Filter topFilter;
     private final List<Weight> weights;
