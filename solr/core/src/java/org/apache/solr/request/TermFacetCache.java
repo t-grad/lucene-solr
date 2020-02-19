@@ -52,6 +52,13 @@ public class TermFacetCache {
       return fieldName.equals(other.fieldName) && qrk.equals(other.qrk);
     }
 
+    public QueryResultKey getQrk() {
+      return qrk;
+    }
+
+    public String getFieldName() {
+      return fieldName;
+    }
   }
 
   public static final class SegmentCacheEntry {
