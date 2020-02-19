@@ -428,6 +428,9 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
     infoRegistry.put(STATISTICS_KEY, this);
     infoRegistry.put(name, this);
     for (SolrCache cache : cacheList) {
+      if (cache instanceof SolrIndexSearcherAware) {
+        ((SolrIndexSearcherAware) cache).inform(this);
+      }
       cache.setState(SolrCache.State.LIVE);
       infoRegistry.put(cache.name(), cache);
     }
