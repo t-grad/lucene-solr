@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.lucene.search.Query;
 import org.apache.solr.client.solrj.SolrResponse;
 import org.apache.solr.common.SolrException;
 import org.apache.solr.common.params.CommonParams;
@@ -118,6 +119,18 @@ public class FacetModule extends SearchComponent {
     rb.req.getContext().put(FacetComponentState.class, fcState);
   }
 
+  public static Query[] getBaseFilters(ResponseBuilder rb) {
+    final Query mainQ = rb.getQuery();
+    final List<Query> filters = rb.getFilters();
+    if (filters == null) {
+      return new Query[]{mainQ};
+    } else {
+      int lastIdx = filters.size();
+      Query[] ret = filters.toArray(new Query[lastIdx + 1]);
+      ret[lastIdx] = mainQ;
+      return ret;
+    }
+  }
 
   @Override
   @SuppressWarnings({"unchecked"})
@@ -130,6 +143,7 @@ public class FacetModule extends SearchComponent {
 
     FacetContext fcontext = new FacetContext();
     fcontext.base = rb.getResults().docSet;
+    fcontext.baseFilters = getBaseFilters(rb);
     fcontext.req = rb.req;
     fcontext.searcher = rb.req.getSearcher();
     fcontext.qcontext = QueryContext.newContext(fcontext.searcher);

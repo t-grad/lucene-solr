@@ -19,13 +19,11 @@ package org.apache.solr.search.facet;
 import java.io.Closeable;
 import java.io.IOException;
 import java.lang.reflect.Array;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 import java.util.function.IntFunction;
 
+import org.apache.lucene.index.IndexReader;
+import org.apache.lucene.index.IndexReader.CacheKey;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.queries.function.FunctionValues;
 import org.apache.lucene.queries.function.ValueSource;
@@ -33,9 +31,13 @@ import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.util.FixedBitSet;
 import org.apache.solr.common.util.SimpleOrderedMap;
+import org.apache.solr.request.TermFacetCache;
 import org.apache.solr.search.DocIterator;
 import org.apache.solr.search.DocSet;
+import org.apache.solr.search.QueryResultKey;
 import org.apache.solr.search.SolrIndexSearcher;
+
+import static org.apache.solr.request.TermFacetCache.*;
 
 /**
  * Accumulates statistics separated by a slot number. 
@@ -605,7 +607,7 @@ public abstract class SlotAcc implements Closeable {
    * sweep collecting in compatible facet processors
    * @see FacetFieldProcessor#registerSweepingAccIfSupportedByCollectAcc()
    */
-  static interface SweepableSlotAcc<T extends SlotAcc> {
+  interface SweepableSlotAcc<T extends SlotAcc> {
     /**
      * Called by processors if they support sweeping. Implementations will often
      * return self or null (the latter indicating that all necessary collection will
@@ -613,12 +615,12 @@ public abstract class SlotAcc implements Closeable {
      * baseSweepingAcc as a result of the call to this method).
      *
      * If an implementing instance chooses to replace itself with another {@link SlotAcc}, it must
-     * call {@link SweepingCountSlotAcc#registerMapping(SlotAcc, SlotAcc)} on the specified
+     * call {@link SweepCoordinator#registerMapping(SlotAcc, SlotAcc)} on the specified
      * baseSweepingAcc to notify it of the mapping from original SlotAcc to the SlotAcc that should
      * be used for purposes of read access. It is the responsibility of the specified {@link SweepingCountSlotAcc}
      * to ensure proper placement/accessibility of the SlotAcc to be used for read access.
      * 
-     * The replacement SlotAcc registered via {@link SweepingCountSlotAcc#registerMapping(SlotAcc, SlotAcc)}
+     * call {@link SweepCoordinator#registerMapping(SlotAcc, SlotAcc)} on the specified
      * will be responsible for output via its {@link SlotAcc#setValues(SimpleOrderedMap, int)} method.
      * An implementer of this method may register such a replacement, and also return a non-null
      * SlotAcc to be used for normal collection (via {@link FacetFieldProcessor#collectAcc}). In this case,
@@ -626,12 +628,12 @@ public abstract class SlotAcc implements Closeable {
      * registered for the purpose of output -- with the former overriding {@link SlotAcc#setValues(SimpleOrderedMap, int)}
      * as a no-op, to prevent setting duplicate values.
      *
-     * @param baseSweepingAcc - never null, where the SlotAcc may register domains for sweep collection,
+     * @param sweepCoordinator - never null, where the SlotAcc may register domains for sweep collection,
      * and must register mappings of new read-access SlotAccs that result from this call.
      * @return SlotAcc to be used for purpose of collection. If null then collect methods will
      * never be called on this SlotAcc.
      */
-    public T registerSweepingAccs(SweepingCountSlotAcc baseSweepingAcc);
+    T registerSweepingAccs(SweepCoordinator sweepCoordinator);
   }
 
   /**
@@ -645,15 +647,42 @@ public abstract class SlotAcc implements Closeable {
     final DocSet docSet;
     final boolean isBase;
     final CountSlotAcc countAcc;
-    public SweepCountAccStruct(DocSet docSet, boolean isBase, CountSlotAcc countAcc) {
+
+    final QueryResultKey qKey;
+    final CacheState cacheState;
+    final Map<CacheKey, SegmentCacheEntry> alreadyCached;
+    final CacheUpdater cacheUpdater;
+
+    public SweepCountAccStruct(DocSet docSet, boolean isBase, CountSlotAcc countAcc,
+                               QueryResultKey qKey, CacheState cacheState, Map<CacheKey, SegmentCacheEntry> alreadyCached, CacheUpdater cacheUpdater) {
       this.docSet = docSet;
       this.isBase = isBase;
       this.countAcc = countAcc;
+      this.qKey = qKey;
+      this.cacheState = cacheState;
+      this.alreadyCached = alreadyCached;
+      this.cacheUpdater = cacheUpdater;
     }
+    
     public SweepCountAccStruct(SweepCountAccStruct t, DocSet replaceDocSet) {
       this.docSet = replaceDocSet;
       this.isBase = t.isBase;
       this.countAcc = t.countAcc;
+      this.qKey = t.qKey;
+      this.cacheState = t.cacheState;
+      this.alreadyCached = t.alreadyCached;
+      this.cacheUpdater = t.cacheUpdater;
+    }
+
+    public SweepCountAccStruct(SweepCountAccStruct t, String replaceKey) {
+      this.docSet = t.docSet;
+      this.isBase = t.isBase;
+      this.countAcc = new ShimCountSlotAcc(t.roCountAcc(), t.countAcc.fcontext);
+      this.countAcc.key = replaceKey;
+      this.qKey = t.qKey;
+      this.cacheState = CacheState.CACHED; // behave as cached, so will not double-populate
+      this.alreadyCached = t.alreadyCached;
+      this.cacheUpdater = t.cacheUpdater;
     }
     /**
      * Because sweep collection offloads "collect" methods to count accumulation code,
@@ -669,33 +698,105 @@ public abstract class SlotAcc implements Closeable {
     }
   }
 
+  enum CacheState { DO_NOT_CACHE, NOT_CACHED, PARTIALLY_CACHED, CACHED }
+
+  private static class ShimCountSlotAcc extends CountSlotAcc {
+    private final ReadOnlyCountSlotAcc backing;
+    public ShimCountSlotAcc(ReadOnlyCountSlotAcc backing, FacetContext fcontext) {
+      super(fcontext);
+      this.backing = backing;
+    }
+    @Override
+    public int getCount(int slot) {
+      return backing.getCount(slot);
+    }
+    @Override
+    public int compare(int slotA, int slotB) {
+      return backing.compare(slotA, slotB);
+    }
+    @Override
+    public Object getValue(int slotNum) throws IOException {
+      return backing.getValue(slotNum);
+    }
+    @Override
+    public void incrementCount(int slot, int count) {
+      throw new UnsupportedOperationException("not supported");
+    }
+    @Override
+    public void collect(int doc, int slot, IntFunction<SlotContext> slotContext) throws IOException {
+      throw new UnsupportedOperationException("not supported");
+    }
+    @Override
+    public void reset() throws IOException {
+      throw new UnsupportedOperationException("not supported");
+    }
+    @Override
+    public void resize(Resizer resizer) {
+      throw new UnsupportedOperationException("not supported");
+    }
+  }
+
+  interface SweepCoordinationPoint {
+    SweepCoordinator getSweepCoordinator();
+  }
+
   /**
    * Special CountSlotAcc used by processors that support sweeping to decide what to sweep over and how to "collect"
    * when doing the sweep.
    *
-   * This class may be used by instances of {@link SweepableSlotAcc} to register DocSet domains (via {@link SweepingCountSlotAcc#add})
+   * This class may be used by instances of {@link SweepableSlotAcc} to register DocSet domains (via {@link SweepCoordinator#add})
    * over which to sweep-collect facet counts.
    *
    * @see SweepableSlotAcc#registerSweepingAccs
    */
-  static class SweepingCountSlotAcc extends CountSlotArrAcc {
+  static class SweepingCountSlotAcc extends CountSlotArrAcc implements SweepCoordinationPoint {
 
+    private final SweepCoordinator sweepCoordinator;
+
+    SweepingCountSlotAcc(int numSlots, FacetFieldProcessor p, DocSet docs, QueryResultKey qKey) {
+      super(p.fcontext, numSlots);
+      SweepCountAccStruct struct = new SweepCountAccStruct(docs, true, this, qKey, CacheState.DO_NOT_CACHE, null, null);
+      this.sweepCoordinator = new SweepCoordinator(p, struct);
+    }
+
+    /**
+     * Always populates the bucket with the current count for that slot. If the count is positive, or if
+     * <code>processEmpty==true</code>, then this method also populates the values from mapped "output" accumulators.
+     *
+     * @see SweepCoordinator#setSweepValues(SimpleOrderedMap, int)
+     */
+    @Override
+    public void setValues(SimpleOrderedMap<Object> bucket, int slotNum) throws IOException {
+      super.setValues(bucket, slotNum);
+      if (0 < getCount(slotNum) || fcontext.processor.freq.processEmpty) {
+        sweepCoordinator.setSweepValues(bucket, slotNum);
+      }
+    }
+
+    @Override
+    public SweepCoordinator getSweepCoordinator() {
+      return sweepCoordinator;
+    }
+  }
+
+  static class SweepCoordinator {
     static final String SWEEP_COLLECTION_DEBUG_KEY = "sweep_collection";
     private final SimpleOrderedMap<Object> debug;
     private final FacetFieldProcessor p;
+    private final FacetContext fcontext;
     final SweepCountAccStruct base;
     final List<SweepCountAccStruct> others = new ArrayList<>();
     private final List<SlotAcc> output = new ArrayList<>();
 
-    SweepingCountSlotAcc(int numSlots, FacetFieldProcessor p) {
-      super(p.fcontext, numSlots);
+    SweepCoordinator(FacetFieldProcessor p, SweepCountAccStruct base) {
       this.p = p;
-      this.base = new SweepCountAccStruct(fcontext.base, true, this);
+      this.fcontext = p.fcontext;
+      this.base = base;
       final FacetDebugInfo fdebug = fcontext.getDebugInfo();
       this.debug = null != fdebug ? new SimpleOrderedMap<>() : null;
       if (null != this.debug) {
         fdebug.putInfoItem(SWEEP_COLLECTION_DEBUG_KEY, debug);
-        debug.add("base", key);
+        debug.add("base", base.countAcc.key);
         debug.add("accs", new ArrayList<String>());
         debug.add("mapped", new ArrayList<String>());
       }
@@ -713,10 +814,8 @@ public abstract class SlotAcc implements Closeable {
      * @return a read-only representation of the count acc which is guaranteed to be populated after sweep count
      *         collection
      */
-    public ReadOnlyCountSlotAcc add(String key, DocSet docs, int numSlots) {
-      final CountSlotAcc count = new CountSlotArrAcc(fcontext, numSlots);
-      count.key = key;
-      final SweepCountAccStruct ret = new SweepCountAccStruct(docs, false, count);
+    public ReadOnlyCountSlotAcc add(String key, DocSet docs, int numSlots, QueryResultKey qKey, int countCacheDf) {
+      final SweepCountAccStruct ret = p.getSweepCountAcc(key, qKey, docs, false, numSlots, countCacheDf);
       if (null != debug) {
         @SuppressWarnings("unchecked")
         List<String> accsDebug = (List<String>) debug.get("accs");
@@ -733,7 +832,7 @@ public abstract class SlotAcc implements Closeable {
      * 
      * It is the responsibility of this method to insure that {@link FacetFieldProcessor} references to fromAcc (other than
      * those within {@link FacetFieldProcessor#collectAcc}, which are set directly by the return value of
-     * {@link SweepableSlotAcc#registerSweepingAccs(SweepingCountSlotAcc)}) are replaced
+     * {@link SweepableSlotAcc#registerSweepingAccs(SweepCoordinator)}) are replaced
      * by references to toAcc. Such references would include, e.g., {@link FacetFieldProcessor#sortAcc}.
      * 
      * It is also this method's responsibility to insure that read access to toAcc (via toAcc's {@link SlotAcc#setValues(SimpleOrderedMap, int)}
@@ -742,7 +841,7 @@ public abstract class SlotAcc implements Closeable {
      * @param fromAcc - the {@link SlotAcc} to be replaced (this will normally be the caller of this method).
      * @param toAcc - the replacement {@link SlotAcc}
      * 
-     * @see SweepableSlotAcc#registerSweepingAccs(SweepingCountSlotAcc)
+     * @see SweepableSlotAcc#registerSweepingAccs(SweepCoordinator)
      */
     public void registerMapping(SlotAcc fromAcc, SlotAcc toAcc) {
       assert fromAcc.key.equals(toAcc.key);
@@ -754,20 +853,6 @@ public abstract class SlotAcc implements Closeable {
         @SuppressWarnings("unchecked")
         List<String> mappedDebug = (List<String>) debug.get("mapped");
         mappedDebug.add(fromAcc.toString());
-      }
-    }
-
-    /**
-     * Always populates the bucket with the current count for that slot. If the count is positive, or if
-     * <code>processEmpty==true</code>, then this method also populates the values from mapped "output" accumulators.
-     *
-     * @see #setSweepValues
-     */
-    @Override
-    public void setValues(SimpleOrderedMap<Object> bucket, int slotNum) throws IOException {
-      super.setValues(bucket, slotNum);
-      if (0 < getCount(slotNum) || fcontext.processor.freq.processEmpty) {
-        setSweepValues(bucket, slotNum);
       }
     }
 
@@ -791,11 +876,14 @@ public abstract class SlotAcc implements Closeable {
      *
      * @returns struct that wraps the {@link FacetContext#base} unless the {@link FacetProcessor#countAcc} is a {@link SweepingCountSlotAcc}
      */
-    public static SweepCountAccStruct baseStructOf(FacetProcessor<?> processor) {
-      if (processor.countAcc instanceof SweepingCountSlotAcc) {
-        return ((SweepingCountSlotAcc) processor.countAcc).base;
+    public static SweepCountAccStruct baseStructOf(FacetProcessor<?> processor, boolean maySkipBaseSetCollection) {
+      final SweepCoordinator sweepCoordinator;
+      if (processor.countAcc instanceof SweepCoordinationPoint
+          && (sweepCoordinator = ((SweepCoordinationPoint) processor.countAcc).getSweepCoordinator()) != null) {
+        SweepCountAccStruct base = sweepCoordinator.base;
+        return (maySkipBaseSetCollection && base.cacheState == CacheState.CACHED) ? null : base;
       }
-      return new SweepCountAccStruct(processor.fcontext.base, true, processor.countAcc);
+      return new SweepCountAccStruct(processor.fcontext.base, true, processor.countAcc, null, CacheState.DO_NOT_CACHE, null, null);
     }
     /**
      * Helper method for code that wants to operating in a sweeping manner even if the current processor
@@ -804,8 +892,17 @@ public abstract class SlotAcc implements Closeable {
      * @returns empty list unless the {@link FacetProcessor#countAcc} is a {@link SweepingCountSlotAcc}
      */
     public static List<SweepCountAccStruct> otherStructsOf(FacetProcessor<?> processor) {
-      if (processor.countAcc instanceof SweepingCountSlotAcc) {
-        return ((SweepingCountSlotAcc) processor.countAcc).others;
+      final SweepCoordinator sweepCoordinator;
+      if (processor.countAcc instanceof SweepCoordinationPoint
+          && (sweepCoordinator = ((SweepCoordinationPoint) processor.countAcc).getSweepCoordinator()) != null) {
+        List<SweepCountAccStruct> others = sweepCoordinator.others;
+        List<SweepCountAccStruct> ret = new ArrayList<>(others.size());
+        for (SweepCountAccStruct other : others) {
+          if (other.cacheState != CacheState.CACHED) {
+            ret.add(other);
+          }
+        }
+        return ret;
       }
       return Collections.emptyList();
     }
