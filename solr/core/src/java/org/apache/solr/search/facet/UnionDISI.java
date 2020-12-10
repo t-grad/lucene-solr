@@ -19,6 +19,8 @@ package org.apache.solr.search.facet;
 import java.io.IOException;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.util.PriorityQueue;
+import org.apache.solr.request.TermFacetCache;
+import org.apache.solr.request.TermFacetCache.CacheUpdater;
 import org.apache.solr.search.facet.SlotAcc.CountSlotAcc;
 
 final class UnionDISI extends SweepDISI {
@@ -43,8 +45,8 @@ final class UnionDISI extends SweepDISI {
       docId = sub.nextDoc();
     }
   }
-  UnionDISI(DocIdSetIterator[] subIterators, CountSlotAcc[] countAccs, int size, int baseIdx) throws IOException {
-    super(size, countAccs);
+  UnionDISI(DocIdSetIterator[] subIterators, CountSlotAcc[] countAccs, CacheUpdater[] cacheUpdaters, int size, int baseIdx) throws IOException {
+    super(size, countAccs, cacheUpdaters);
     this.maxIdx = size - 1;
     queue = new PriorityQueue<SubIterStruct>(size) {
       @Override
@@ -97,4 +99,8 @@ final class UnionDISI extends SweepDISI {
     return i;
   }
 
+  @Override
+  public boolean hasBase() {
+    return baseSub != null;
+  }
 }

@@ -18,6 +18,7 @@ package org.apache.solr.search;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.Sort;
@@ -55,7 +56,7 @@ public final class QueryResultKey implements Accountable {
     this.nc_flags = nc_flags;
     this.minExactCount = minExactCount;
 
-    int h = query.hashCode();
+    int h = query == null ? 0 : query.hashCode();
 
     if (filters != null) {
       for (Query filt : filters)
@@ -100,7 +101,7 @@ public final class QueryResultKey implements Accountable {
     // check for the thing most likely to be different (and the fastest things)
     // first.
     if (this.sfields.length != other.sfields.length) return false;
-    if (!this.query.equals(other.query)) return false;
+    if (!Objects.equals(this.query, other.query)) return false;
     if (!unorderedCompare(this.filters, other.filters)) return false;
     if (this.minExactCount != other.minExactCount) return false;
 

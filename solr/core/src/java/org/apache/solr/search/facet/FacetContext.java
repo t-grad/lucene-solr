@@ -16,9 +16,11 @@
  */
 package org.apache.solr.search.facet;
 
+import java.util.List;
 import java.util.Map;
 
 import org.apache.lucene.search.Query;
+import org.apache.lucene.util.ArrayUtil;
 import org.apache.solr.request.SolrQueryRequest;
 import org.apache.solr.search.DocSet;
 import org.apache.solr.search.QueryContext;
@@ -36,6 +38,7 @@ public class FacetContext {
   SolrQueryRequest req;  // TODO: replace with params?
   SolrIndexSearcher searcher;
   Query filter;  // TODO: keep track of as a DocSet or as a Query?
+  Query[] baseFilters;
   DocSet base;
   FacetContext parent;
   int flags;
@@ -51,6 +54,29 @@ public class FacetContext {
 
   public boolean isShard() {
     return (flags & IS_SHARD) != 0;
+  }
+
+  static Query[] append(Query[] base, Query append) {
+    if (append == null) {
+      return base;
+    } else if (base == null) {
+      return new Query[]{append};
+    }
+    Query[] ret = ArrayUtil.growExact(base, base.length + 1);
+    ret[base.length] = append;
+    return ret;
+  }
+
+  static Query[] append(Query[] base, List<Query> append) {
+    if (append == null || append.isEmpty()) {
+      return base;
+    } else if (base == null) {
+      return append.toArray(new Query[append.size()]);
+    }
+    Query[] ret = new Query[append.size() + base.length];
+    append.toArray(ret);
+    System.arraycopy(base, 0, ret, append.size(), base.length);
+    return ret;
   }
 
   public FacetProcessor<?> getFacetProcessor() {
@@ -97,6 +123,7 @@ public class FacetContext {
     FacetContext ctx = new FacetContext();
     ctx.parent = this;
     ctx.base = domain;
+    ctx.baseFilters = append(baseFilters, filter);
     ctx.filter = filter;
 
     // carry over from parent
